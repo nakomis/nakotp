@@ -9,10 +9,14 @@
 #include <sha1.h>
 #include "secrets.h"
 #include "server_certs.h"
+#include <Fonts/FreeMono9pt7b.h>
+#include <Fonts/FreeMonoBold18pt7b.h>
+
 
 // OLED display settings
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
+#define HEADER_HEIGHT 16
 #define OLED_RESET -1
 #define SDA_PIN 14
 #define SCL_PIN 12
@@ -198,28 +202,35 @@ void loop() {
     // Update display
     display.clearDisplay();
 
-    // Header
-    display.setTextSize(1);
-    display.setCursor(0, 0);
+    display.setFont(&FreeMono9pt7b);
+
+    // Header - centered
+    int16_t x1, y1;
+    uint16_t textWidth, textHeight;
+    display.getTextBounds(OTP_HEADER, 0, 0, &x1, &y1, &textWidth, &textHeight);
+    display.setCursor((SCREEN_WIDTH - textWidth) / 2, textHeight + ((HEADER_HEIGHT - textHeight) / 2));
     display.println(OTP_HEADER);
+    display.setFont();
 
     // Horizontal line
-    display.drawLine(0, 24, 127, 24, SSD1306_WHITE);
+    display.drawLine(0, HEADER_HEIGHT + 2, 127, HEADER_HEIGHT + 2, SSD1306_WHITE);
 
     // OTP Code - large font, centered for 6 digits
-    display.setTextSize(3);
-    display.setCursor(10, 30);
+    display.setTextSize(1);
+    display.setFont(&FreeMonoBold18pt7b);
+    display.setCursor(0, 47);
     display.print(currentCode);
+    display.setFont();
 
     // Time remaining - progress bar
     display.setTextSize(1);
-    display.setCursor(100, 56);
+    display.setCursor(110, 56);
     display.print(secondsRemaining);
     display.print("s");
 
     // Progress bar
-    int barWidth = map(secondsRemaining, 0, 30, 0, 90);
-    display.drawRect(0, 56, 92, 8, SSD1306_WHITE);
+    int barWidth = map(secondsRemaining, 0, 30, 0, 100);
+    display.drawRect(0, 56, 102, 8, SSD1306_WHITE);
     display.fillRect(1, 57, barWidth, 6, SSD1306_WHITE);
 
     display.display();
