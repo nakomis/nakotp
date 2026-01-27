@@ -6,6 +6,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from subprocess import DEVNULL
 from pathlib import Path
 
 CONFIG_FILE = Path.home() / ".nakotp"
@@ -41,6 +42,9 @@ def expand_ip(partial):
 def copy_to_clipboard(text):
     subprocess.run(["pbcopy"], input=text.encode(), check=True)
 
+def clear_clipboard():
+    subprocess.run(["pbcopy"], stdin=DEVNULL, check=True)
+
 def get_ssl_context():
     """Create SSL context with client certificate."""
     ca_cert = CERTS_DIR / "ca.crt"
@@ -67,6 +71,7 @@ def get_code(ip, ssl_context):
         raise ConnectionError(f"Failed to connect to {ip}: {e}")
 
 def main():
+    clear_clipboard();
     config = load_config()
     min_expiry = config.get("min_expiry_seconds", 5)
 
@@ -111,6 +116,7 @@ def main():
         # Success
         copy_to_clipboard(code)
         print(f"{code} (copied, expires in {int(seconds_remaining)}s)")
+        print('\a')
         break
 
 if __name__ == "__main__":
