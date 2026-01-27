@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
+#include <WiFiClientSecure.h>
 #include <WiFiUdp.h>
 #include <NTPClient.h>
 #include <Wire.h>
@@ -8,6 +8,7 @@
 #include <Adafruit_SSD1306.h>
 #include <sha1.h>
 #include "secrets.h"
+#include "server_certs.h"
 
 // OLED display settings
 #define SCREEN_WIDTH 128
@@ -22,8 +23,13 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 60000);
 
-// Web Server
-ESP8266WebServer server(80);
+// SSL certificates
+BearSSL::X509List serverCertList(server_cert);
+BearSSL::PrivateKey serverPrivKey(server_key);
+BearSSL::X509List caCertList(ca_cert);
+
+// HTTPS Server
+BearSSL::WiFiServerSecure server(443);
 
 // Custom TOTP implementation with configurable digits
 String getTotp(long timeStamp) {
@@ -61,14 +67,6 @@ String getTotp(long timeStamp) {
 
 String currentCode = "";
 unsigned long lastCodeTime = 0;
-
-void handleRoot() {
-  unsigned long epochTime = timeClient.getEpochTime();
-  unsigned long expiresAt = ((epochTime / 30) + 1) * 30;
-
-  String json = "{\"code\":\"" + currentCode + "\",\"expires_at\":" + String(expiresAt) + "}";
-  server.send(200, "application/json", json);
-}
 
 void setup() {
   Serial.begin(115200);
@@ -112,14 +110,71 @@ void setup() {
 
   Serial.println("NTP synchronized");
 
-  // Start web server
-  server.on("/", handleRoot);
+  // Configure HTTPS server with mutual TLS
+  server.setRSACert(&serverCertList, &serverPrivKey);
+  server.setClientTrustAnchor(&caCertList);
+
+  // Start HTTPS server
   server.begin();
-  Serial.println("HTTP server started");
+  Serial.println("HTTPS server started on port 443");
 }
 
+void handleClient(BearSSL::WiFiClientSecure &client) {
+  // Wait for data
+  unsigned long timeout = millis() + 2000;
+  while (!client.available() && millis() < timeout) {
+    delay(1);
+  }
+
+  if (!client.available()) {
+    client.stop();
+    return;
+  }
+
+  // Read request line
+  String request = client.readStringUntil('\r');
+  client.readStringUntil('\n');
+
+  // Consume headers
+  while (client.available()) {
+    String line = client.readStringUntil('\n');
+    if (line.length() <= 1) break;
+  }
+
+  // Only handle GET /
+  if (request.startsWith("GET / ") || request.startsWith("GET /index") || request == "GET /") {
+    unsigned long epochTime = timeClient.getEpochTime();
+    unsigned long expiresAt = ((epochTime / 30) + 1) * 30;
+
+    String json = "{\"code\":\"" + currentCode + "\",\"expires_at\":" + String(expiresAt) + "}";
+
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.print("Content-Length: ");
+    client.println(json.length());
+    client.println();
+    client.print(json);
+  } else {
+    client.println("HTTP/1.1 404 Not Found");
+    client.println("Connection: close");
+    client.println();
+  }
+
+  client.stop();
+}
+
+unsigned long lastDisplayUpdate = 0;
+
 void loop() {
-  server.handleClient();
+  // Handle HTTPS clients - check frequently
+  BearSSL::WiFiClientSecure client = server.accept();
+  if (client) {
+    handleClient(client);
+  }
+
+  yield();  // Let WiFi stack process
+
   timeClient.update();
 
   unsigned long epochTime = timeClient.getEpochTime();
@@ -133,37 +188,42 @@ void loop() {
     Serial.println(currentCode);
   }
 
-  // Calculate seconds remaining in current period
-  int secondsRemaining = 30 - (epochTime % 30);
+  // Update display only every 250ms to reduce CPU load
+  if (millis() - lastDisplayUpdate >= 250) {
+    lastDisplayUpdate = millis();
 
-  // Update display
-  display.clearDisplay();
+    // Calculate seconds remaining in current period
+    int secondsRemaining = 30 - (epochTime % 30);
 
-  // Header
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(OTP_HEADER);
+    // Update display
+    display.clearDisplay();
 
-  // Horizontal line
-  display.drawLine(0, 24, 127, 24, SSD1306_WHITE);
+    // Header
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println(OTP_HEADER);
 
-  // OTP Code - large font, centered for 6 digits
-  display.setTextSize(3);
-  display.setCursor(10, 30);
-  display.print(currentCode);
+    // Horizontal line
+    display.drawLine(0, 24, 127, 24, SSD1306_WHITE);
 
-  // Time remaining - progress bar
-  display.setTextSize(1);
-  display.setCursor(100, 56);
-  display.print(secondsRemaining);
-  display.print("s");
+    // OTP Code - large font, centered for 6 digits
+    display.setTextSize(3);
+    display.setCursor(10, 30);
+    display.print(currentCode);
 
-  // Progress bar
-  int barWidth = map(secondsRemaining, 0, 30, 0, 90);
-  display.drawRect(0, 56, 92, 8, SSD1306_WHITE);
-  display.fillRect(1, 57, barWidth, 6, SSD1306_WHITE);
+    // Time remaining - progress bar
+    display.setTextSize(1);
+    display.setCursor(100, 56);
+    display.print(secondsRemaining);
+    display.print("s");
 
-  display.display();
+    // Progress bar
+    int barWidth = map(secondsRemaining, 0, 30, 0, 90);
+    display.drawRect(0, 56, 92, 8, SSD1306_WHITE);
+    display.fillRect(1, 57, barWidth, 6, SSD1306_WHITE);
 
-  delay(250);
+    display.display();
+  }
+
+  yield();  // Let WiFi stack process
 }

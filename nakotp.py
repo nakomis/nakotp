@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import ssl
 import subprocess
 import sys
 import time
@@ -8,6 +9,7 @@ import urllib.error
 from pathlib import Path
 
 CONFIG_FILE = Path.home() / ".nakotp"
+CERTS_DIR = Path.home() / ".nakotp-certs"
 
 def load_config():
     if CONFIG_FILE.exists():
@@ -39,18 +41,36 @@ def expand_ip(partial):
 def copy_to_clipboard(text):
     subprocess.run(["pbcopy"], input=text.encode(), check=True)
 
-def get_code(ip):
-    """Fetch OTP code from device."""
-    url = f"http://{ip}/"
+def get_ssl_context():
+    """Create SSL context with client certificate."""
+    ca_cert = CERTS_DIR / "ca.crt"
+    client_pem = CERTS_DIR / "client.pem"
+
+    if not ca_cert.exists() or not client_pem.exists():
+        print(f"Error: Certificates not found in {CERTS_DIR}")
+        print(f"Run: mkdir -p {CERTS_DIR}")
+        print(f"Then copy ca.crt and client.pem from the certs/ folder")
+        sys.exit(1)
+
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=str(ca_cert))
+    ctx.load_cert_chain(certfile=str(client_pem))
+    ctx.check_hostname = False
+    return ctx
+
+def get_code(ip, ssl_context):
+    """Fetch OTP code from device via HTTPS."""
+    url = f"https://{ip}/"
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        with urllib.request.urlopen(url, timeout=15, context=ssl_context) as response:
             return json.loads(response.read().decode())
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ssl.SSLError) as e:
         raise ConnectionError(f"Failed to connect to {ip}: {e}")
 
 def main():
     config = load_config()
     min_expiry = config.get("min_expiry_seconds", 5)
+
+    ssl_context = get_ssl_context()
 
     while True:
         # START: Get IP
@@ -68,7 +88,7 @@ def main():
 
         # GET_CODE
         try:
-            data = get_code(ip)
+            data = get_code(ip, ssl_context)
         except ConnectionError as e:
             print(f"Connection failed: {e}")
             print("Clearing saved IP...")

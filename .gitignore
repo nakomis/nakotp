@@ -4,3 +4,8 @@
 .vscode
 .pio
 **/secrets.h
+**/server_certs.h
+certs/*.key
+certs/*.crt
+certs/*.pem
+certs/*.h
