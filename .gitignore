@@ -1,0 +1,6 @@
+.DS_Store
+**/*.bkp
+.python-version
+.vscode
+.pio
+**/secrets.h
