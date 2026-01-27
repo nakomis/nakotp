@@ -110,8 +110,8 @@ void setup() {
 
   Serial.println("NTP synchronized");
 
-  // Configure HTTPS server with mutual TLS
-  server.setRSACert(&serverCertList, &serverPrivKey);
+  // Configure HTTPS server with mutual TLS (using EC certs)
+  server.setECCert(&serverCertList, BR_KEYTYPE_EC, &serverPrivKey);
   server.setClientTrustAnchor(&caCertList);
 
   // Start HTTPS server
