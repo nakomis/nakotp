@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
 #include <WiFiClientSecure.h>
 #include <WiFiUdp.h>
 #include <NTPClient.h>
@@ -31,6 +32,9 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 60000);
 BearSSL::X509List serverCertList(server_cert);
 BearSSL::PrivateKey serverPrivKey(server_key);
 BearSSL::X509List caCertList(ca_cert);
+
+unsigned long lastNtpSyncMillis = 0;
+const unsigned long ntpSyncInterval = 1000 * 60 * 60; // Sync with NTP every hour
 
 // HTTPS Server
 BearSSL::WiFiServerSecure server(443);
@@ -92,6 +96,7 @@ void setup() {
   display.display();
 
   // Connect to WiFi
+  WiFi.hostname(HOSTNAME);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -101,12 +106,24 @@ void setup() {
   Serial.println("\nWiFi connected");
   Serial.println(WiFi.localIP());
 
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.println(F("WiFi connected!"));
-  display.println(WiFi.localIP());
+  if (MDNS.begin(HOSTNAME)) {
+    Serial.println("mDNS responder started");
+    MDNS.addService("https", "tcp", 443);
+    display.setCursor(0, 16);
+    display.printf("Hostname: %s", HOSTNAME);
+  } else {
+    Serial.printf("mDNS responder failed to register hostname %s", HOSTNAME);
+    display.setCursor(0, 16);
+    display.printf("mDSN Failed: %s", HOSTNAME);
+  }
   display.display();
-  delay(1000);
+
+  display.setCursor(0, 32);
+  display.printf("IP: %s", WiFi.localIP().toString());
+  display.setCursor(0, 48);
+  display.println(F("WiFi connected!"));
+  display.display();
+  delay(5000);
 
   // Initialize NTP
   timeClient.begin();
@@ -171,6 +188,9 @@ void handleClient(BearSSL::WiFiClientSecure &client) {
 unsigned long lastDisplayUpdate = 0;
 
 void loop() {
+  // Keep mDNS service running (responds to MDSN requests)
+  MDNS.update();
+
   // Handle HTTPS clients - check frequently
   BearSSL::WiFiClientSecure client = server.accept();
   if (client) {
@@ -179,7 +199,14 @@ void loop() {
 
   yield();  // Let WiFi stack process
 
-  timeClient.update();
+  // Keep mDNS service running (responds to MDSN requests)
+  MDNS.update();
+
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastNtpSyncMillis > ntpSyncInterval) {
+      timeClient.update();
+      lastNtpSyncMillis = currentMillis;
+  }
 
   unsigned long epochTime = timeClient.getEpochTime();
   unsigned long timeStep = epochTime / 30;

@@ -13,6 +13,7 @@ COUNTRY="US"
 STATE="State"
 CITY="City"
 ORG="NakOTP"
+DEVICE_NAME="nakotp.local"
 
 # Clean up old certs
 rm -f *.pem *.key *.crt *.h
@@ -25,9 +26,10 @@ openssl req -new -x509 -days $DAYS_VALID -key ca.key -out ca.crt \
 echo "=== Generating Server Certificate (EC) ==="
 openssl ecparam -name $EC_CURVE -genkey -noout -out server.key
 openssl req -new -key server.key -out server.csr \
-    -subj "/C=$COUNTRY/ST=$STATE/L=$CITY/O=$ORG/CN=nakotp-device"
+    -subj "/C=$COUNTRY/ST=$STATE/L=$CITY/O=$ORG/CN=$DEVICE_NAME"
 openssl x509 -req -days $DAYS_VALID -in server.csr -CA ca.crt -CAkey ca.key \
-    -CAcreateserial -out server.crt
+    -CAcreateserial -out server.crt \
+    -extfile <(echo "subjectAltName=DNS:$DEVICE_NAME,DNS:nakotp-device")
 
 echo "=== Generating Client Certificate (EC) ==="
 openssl ecparam -name $EC_CURVE -genkey -noout -out client.key
