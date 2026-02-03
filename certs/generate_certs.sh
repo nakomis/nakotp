@@ -21,7 +21,9 @@ rm -f *.pem *.key *.crt *.h
 echo "=== Generating CA (EC) ==="
 openssl ecparam -name $EC_CURVE -genkey -noout -out ca.key
 openssl req -new -x509 -days $DAYS_VALID -key ca.key -out ca.crt \
-    -subj "/C=$COUNTRY/ST=$STATE/L=$CITY/O=$ORG/CN=NakOTP-CA"
+    -subj "/C=$COUNTRY/ST=$STATE/L=$CITY/O=$ORG/CN=NakOTP-CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
 
 echo "=== Generating Server Certificate (EC) ==="
 openssl ecparam -name $EC_CURVE -genkey -noout -out server.key
@@ -40,6 +42,9 @@ openssl x509 -req -days $DAYS_VALID -in client.csr -CA ca.crt -CAkey ca.key \
 
 # Create combined PEM for Python client
 cat client.crt client.key > client.pem
+
+# Create PKCS#12 for browser/Keychain import (password: nakotp)
+openssl pkcs12 -export -out client.p12 -inkey client.key -in client.crt -certfile ca.crt -passout pass:nakotp
 
 # Clean up CSRs
 rm -f *.csr *.srl
@@ -83,3 +88,7 @@ echo "Files created with EC (prime256v1) - much faster than RSA!"
 echo ""
 echo "For Python client:"
 echo "  cp ca.crt client.pem ~/.nakotp-certs/"
+echo ""
+echo "For browser (Chrome/Safari):"
+echo "  1. Double-click client.p12 to import to Keychain (password: nakotp)"
+echo "  2. Double-click ca.crt to trust the CA certificate"

@@ -39,6 +39,9 @@ const unsigned long ntpSyncInterval = 1000 * 60 * 60; // Sync with NTP every hou
 // HTTPS Server
 BearSSL::WiFiServerSecure server(443);
 
+// HTTP Server (for redirect to HTTPS)
+WiFiServer httpServer(80);
+
 // Custom TOTP implementation with configurable digits
 String getTotp(long timeStamp) {
   long timeStep = timeStamp / 30;
@@ -119,7 +122,7 @@ void setup() {
   display.display();
 
   display.setCursor(0, 32);
-  display.printf("IP: %s", WiFi.localIP().toString());
+  display.printf("IP: %s", WiFi.localIP().toString().c_str());
   display.setCursor(0, 48);
   display.println(F("WiFi connected!"));
   display.display();
@@ -138,6 +141,10 @@ void setup() {
   // Start HTTPS server
   server.begin();
   Serial.println("HTTPS server started on port 443");
+
+  // Start HTTP server (for redirect)
+  httpServer.begin();
+  Serial.println("HTTP server started on port 80 (redirects to HTTPS)");
 }
 
 void handleClient(BearSSL::WiFiClientSecure &client) {
@@ -191,7 +198,17 @@ void loop() {
   // Keep mDNS service running (responds to MDSN requests)
   MDNS.update();
 
-  // Handle HTTPS clients - check frequently
+  // Handle HTTP clients (redirect to HTTPS)
+  WiFiClient httpClient = httpServer.accept();
+  if (httpClient) {
+    httpClient.println("HTTP/1.1 301 Moved Permanently");
+    httpClient.printf("Location: https://%s.local/\r\n", HOSTNAME);
+    httpClient.println("Connection: close");
+    httpClient.println();
+    httpClient.stop();
+  }
+
+  // Handle HTTPS clients
   BearSSL::WiFiClientSecure client = server.accept();
   if (client) {
     handleClient(client);
