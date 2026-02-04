@@ -6,6 +6,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from rich import print
 from subprocess import DEVNULL
 from pathlib import Path
 
@@ -63,13 +64,13 @@ def main():
         seconds_remaining = expires_at - now
 
         if seconds_remaining < MIN_EXPIRY_SECONDS:
-            print(f"Code expires in {seconds_remaining:.1f}s, waiting for new code...")
+            print(f"[red]Code expires in {seconds_remaining:.1f}s[/], waiting for new code...")
             time.sleep(seconds_remaining + 0.5)
             continue
 
         # Success
         copy_to_clipboard(code)
-        print(f"{code} (copied, expires in {int(seconds_remaining)}s)")
+        print(f"[bold blue]{code}[/] (copied, expires in {int(seconds_remaining)}s)")
         print('\a')
         break
 
