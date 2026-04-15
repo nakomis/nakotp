@@ -1,2 +1,4 @@
 export AWS_PROFILE=mh
-aws s3 sync . s3://nak-sandbox-certs/nakotp-pi
+CERTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+aws s3 sync "$CERTS_DIR" s3://nak-sandbox-certs/nakotp-pi \
+    --exclude "*.sh"
