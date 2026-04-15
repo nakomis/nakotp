@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
@@ -8,7 +9,7 @@ use std::{
 use log::{error, info};
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::Uri,
     response::{Html, IntoResponse, Redirect},
     routing::get,
@@ -22,14 +23,27 @@ use tokio::net::TcpListener;
 
 type HmacSha1 = Hmac<Sha1>;
 
+// ---------------------------------------------------------------------------
+// Configuration (read from /etc/nakotp/config.toml)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct AccountConfig {
+    hmac_key_hex: String,
+    otp_header: String,
+    /// Number of OTP digits (typically 6 or 8)
+    #[serde(default = "default_digits")]
+    otp_digits: u32,
+}
+
+fn default_digits() -> u32 {
+    6
+}
+
 #[derive(Deserialize)]
 struct Config {
-    /// Hex-encoded HMAC key bytes (e.g. "deadbeef...")
-    hmac_key_hex: String,
-    /// Number of OTP digits (typically 6 or 8)
-    otp_digits: u32,
-    /// Display name shown in the web UI header
-    otp_header: String,
+    #[serde(rename = "account")]
+    accounts: Vec<AccountConfig>,
     /// Path to the TLS certificate chain PEM file
     cert_path: String,
     /// Path to the TLS private key PEM file
@@ -47,21 +61,32 @@ struct Config {
     client_ca_cert: Option<String>,
 }
 
-struct AppState {
+// ---------------------------------------------------------------------------
+// Application state
+// ---------------------------------------------------------------------------
+
+struct Account {
     hmac_key: Vec<u8>,
-    otp_digits: u32,
     otp_header: String,
+    otp_digits: u32,
 }
+
+struct AppState {
+    accounts: Vec<Account>,
+}
+
+// ---------------------------------------------------------------------------
+// TOTP
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct OtpResponse {
+    header: String,
     code: String,
     expires_at: u64,
-    header: String,
     digits: u32,
 }
 
-/// Compute the current TOTP code and the Unix timestamp at which it expires.
 fn compute_totp(key: &[u8], digits: u32) -> (String, u64) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -86,24 +111,86 @@ fn compute_totp(key: &[u8], digits: u32) -> (String, u64) {
     (code, expires_at)
 }
 
-async fn handle_api_code(State(state): State<Arc<AppState>>) -> Json<OtpResponse> {
-    let (code, expires_at) = compute_totp(&state.hmac_key, state.otp_digits);
-    info!("GET /api/code → {}", code);
-    Json(OtpResponse {
-        code,
-        expires_at,
-        header: state.otp_header.clone(),
-        digits: state.otp_digits,
-    })
+fn all_codes(state: &AppState) -> Vec<OtpResponse> {
+    state
+        .accounts
+        .iter()
+        .map(|acc| {
+            let (code, expires_at) = compute_totp(&acc.hmac_key, acc.otp_digits);
+            OtpResponse {
+                header: acc.otp_header.clone(),
+                code,
+                expires_at,
+                digits: acc.otp_digits,
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_bare(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Vec<OtpResponse>> {
+    let filter = params.get("account").map(|s| s.to_lowercase());
+    let codes: Vec<OtpResponse> = all_codes(&state)
+        .into_iter()
+        .filter(|r| {
+            filter
+                .as_deref()
+                .map(|f| r.header.to_lowercase().starts_with(f))
+                .unwrap_or(true)
+        })
+        .collect();
+    info!(
+        "GET /bare{} → {} account(s)",
+        filter.as_deref().map(|f| format!("?account={f}")).unwrap_or_default(),
+        codes.len()
+    );
+    Json(codes)
 }
 
 async fn handle_index(State(state): State<Arc<AppState>>) -> Html<String> {
-    let (code, expires_at) = compute_totp(&state.hmac_key, state.otp_digits);
-    info!("GET / → {}", code);
-    Html(render_html(&state.otp_header, &code, expires_at))
+    let codes = all_codes(&state);
+    info!("GET / → {} account(s)", codes.len());
+    Html(render_html(&codes))
 }
 
-fn render_html(header: &str, code: &str, expires_at: u64) -> String {
+fn render_html(accounts: &[OtpResponse]) -> String {
+    // Build the initial cards HTML
+    let cards: String = accounts
+        .iter()
+        .map(|acc| {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let remaining = acc.expires_at.saturating_sub(now);
+            let pct = (remaining as f64 / 30.0 * 100.0) as u64;
+            let urgent = if remaining <= 5 { " urgent" } else { "" };
+            format!(
+                r#"<div class="card" data-header="{header}">
+  <div class="acct-header">{header}</div>
+  <div class="code">{code}</div>
+  <div class="progress-track"><div class="progress-fill{urgent}" style="width:{pct}%"></div></div>
+  <div class="countdown"><span class="seconds">{remaining}</span>s remaining</div>
+</div>"#,
+                header = acc.header,
+                code = acc.code,
+                urgent = urgent,
+                pct = pct,
+                remaining = remaining,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Serialise initial data for the JS bootstrap
+    let init_data = serde_json::to_string(accounts).unwrap_or_else(|_| "[]".into());
+
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -117,32 +204,42 @@ fn render_html(header: &str, code: &str, expires_at: u64) -> String {
       background: #0d1117;
       color: #e6edf3;
       font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
+      padding: 2rem;
+    }}
+    .accounts {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      justify-content: center;
+      max-width: 900px;
+      width: 100%;
     }}
     .card {{
       background: #161b22;
       border: 1px solid #30363d;
       border-radius: 12px;
-      padding: 2rem 3rem;
+      padding: 1.5rem 2rem;
       text-align: center;
-      min-width: 320px;
+      flex: 1 1 260px;
+      max-width: 340px;
     }}
-    .header {{
+    .acct-header {{
       font-size: 0.8rem;
       color: #8b949e;
       letter-spacing: 0.12em;
       text-transform: uppercase;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1rem;
     }}
     .code {{
-      font-size: 3.5rem;
+      font-size: 3rem;
       font-weight: 700;
       letter-spacing: 0.3em;
       color: #58a6ff;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1rem;
       transition: opacity 0.2s ease;
     }}
     .code.fading {{ opacity: 0.25; }}
@@ -150,7 +247,7 @@ fn render_html(header: &str, code: &str, expires_at: u64) -> String {
       background: #21262d;
       border-radius: 4px;
       height: 6px;
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.4rem;
       overflow: hidden;
     }}
     .progress-fill {{
@@ -161,54 +258,58 @@ fn render_html(header: &str, code: &str, expires_at: u64) -> String {
     }}
     .progress-fill.urgent {{ background: #da3633; }}
     .countdown {{
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: #8b949e;
     }}
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="header" id="header">{header}</div>
-    <div class="code" id="code">{code}</div>
-    <div class="progress-track">
-      <div class="progress-fill" id="progress"></div>
-    </div>
-    <div class="countdown"><span id="seconds">--</span>s remaining</div>
+  <div class="accounts" id="accounts">
+    {cards}
   </div>
   <script>
-    let expiresAt = {expires_at};
-    let currentCode = document.getElementById('code').textContent;
+    // Bootstrap from server-rendered data so there's no flash on load
+    let accounts = {init_data};
+
+    function cardEl(header) {{
+      return document.querySelector(`.card[data-header="${{header}}"]`);
+    }}
 
     function updateDisplay() {{
       const now = Math.floor(Date.now() / 1000);
-      const remaining = Math.max(0, expiresAt - now);
-      const pct = (remaining / 30) * 100;
-
-      document.getElementById('seconds').textContent = remaining;
-      const fill = document.getElementById('progress');
-      fill.style.width = pct + '%';
-      fill.className = 'progress-fill' + (remaining <= 5 ? ' urgent' : '');
-
-      if (remaining <= 1) {{
-        fetchCode();
-      }}
+      accounts.forEach(acc => {{
+        const card = cardEl(acc.header);
+        if (!card) return;
+        const remaining = Math.max(0, acc.expires_at - now);
+        const pct = (remaining / 30) * 100;
+        card.querySelector('.seconds').textContent = remaining;
+        const fill = card.querySelector('.progress-fill');
+        fill.style.width = pct + '%';
+        fill.className = 'progress-fill' + (remaining <= 5 ? ' urgent' : '');
+        if (remaining <= 1) fetchCodes();
+      }});
     }}
 
-    async function fetchCode() {{
+    async function fetchCodes() {{
       try {{
-        const resp = await fetch('/api/code');
+        const resp = await fetch('/bare');
         const data = await resp.json();
-        const codeEl = document.getElementById('code');
-        if (data.code !== currentCode) {{
-          codeEl.classList.add('fading');
-          await new Promise(r => setTimeout(r, 200));
-          codeEl.textContent = data.code;
-          currentCode = data.code;
-          codeEl.classList.remove('fading');
-        }}
-        expiresAt = data.expires_at;
+        data.forEach(acc => {{
+          const existing = accounts.find(a => a.header === acc.header);
+          if (existing && existing.code !== acc.code) {{
+            const codeEl = cardEl(acc.header)?.querySelector('.code');
+            if (codeEl) {{
+              codeEl.classList.add('fading');
+              setTimeout(() => {{
+                codeEl.textContent = acc.code;
+                codeEl.classList.remove('fading');
+              }}, 200);
+            }}
+          }}
+        }});
+        accounts = data;
       }} catch (e) {{
-        console.error('Failed to fetch code:', e);
+        console.error('Failed to fetch codes:', e);
       }}
     }}
 
@@ -217,14 +318,20 @@ fn render_html(header: &str, code: &str, expires_at: u64) -> String {
   </script>
 </body>
 </html>"#,
-        header = header,
-        code = code,
-        expires_at = expires_at,
+        cards = cards,
+        init_data = init_data,
     )
 }
 
-/// Build a rustls ServerConfig that requires a client certificate signed by the
-/// given CA, using the Let's Encrypt cert/key for the server identity.
+async fn handle_http_redirect(uri: Uri) -> impl IntoResponse {
+    let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+    Redirect::permanent(&format!("https://nakotp.nasbox.nakomis.com{path}"))
+}
+
+// ---------------------------------------------------------------------------
+// mTLS
+// ---------------------------------------------------------------------------
+
 async fn build_mtls_server_config(
     ca_cert_path: &str,
     server_cert_path: &str,
@@ -236,7 +343,6 @@ async fn build_mtls_server_config(
         RootCertStore, ServerConfig,
     };
 
-    // Load CA cert — used to verify client certificates
     let ca_pem = tokio::fs::read(ca_cert_path).await.map_err(|e| {
         anyhow::anyhow!("could not read client CA cert {ca_cert_path}: {e}")
     })?;
@@ -250,14 +356,12 @@ async fn build_mtls_server_config(
 
     let client_verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
 
-    // Load server cert chain (Let's Encrypt fullchain.pem)
     let cert_pem = tokio::fs::read(server_cert_path).await.map_err(|e| {
         anyhow::anyhow!("could not read server cert {server_cert_path}: {e}")
     })?;
     let certs: Vec<CertificateDer<'static>> =
         rustls_pemfile::certs(&mut cert_pem.as_slice()).collect::<Result<_, _>>()?;
 
-    // Load server private key
     let key_pem = tokio::fs::read(server_key_path).await.map_err(|e| {
         anyhow::anyhow!("could not read server key {server_key_path}: {e}")
     })?;
@@ -271,6 +375,10 @@ async fn build_mtls_server_config(
 
     Ok(config)
 }
+
+// ---------------------------------------------------------------------------
+// Logging
+// ---------------------------------------------------------------------------
 
 fn init_logging(log_dir: &str) -> anyhow::Result<()> {
     use log::LevelFilter;
@@ -316,17 +424,33 @@ fn init_logging(log_dir: &str) -> anyhow::Result<()> {
         )?;
 
     log4rs::init_config(config)?;
-
-    // Route axum's tracing events into the log crate so they appear in log4rs
     tracing_log::LogTracer::init()?;
 
     Ok(())
 }
 
-async fn handle_http_redirect(uri: Uri) -> impl IntoResponse {
-    let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
-    Redirect::permanent(&format!("https://nakotp.nasbox.nakomis.com{path}"))
+fn env_logger_fallback() {
+    use log::LevelFilter;
+    use log4rs::{
+        append::console::ConsoleAppender,
+        config::{Appender, Config, Root},
+        encode::pattern::PatternEncoder,
+    };
+    let console = ConsoleAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{d(%H:%M:%S)} [{l:<5}] {m}{n}")))
+        .build();
+    if let Ok(config) = Config::builder()
+        .appender(Appender::builder().build("console", Box::new(console)))
+        .build(Root::builder().appender("console").build(LevelFilter::Info))
+    {
+        let _ = log4rs::init_config(config);
+    }
+    let _ = tracing_log::LogTracer::init();
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 fn parse_hex_key(hex: &str) -> anyhow::Result<Vec<u8>> {
     if hex.len() % 2 != 0 {
@@ -340,6 +464,10 @@ fn parse_hex_key(hex: &str) -> anyhow::Result<Vec<u8>> {
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -360,19 +488,29 @@ async fn main() -> anyhow::Result<()> {
     let log_dir = config.log_dir.as_deref().unwrap_or("/var/log/nakotp");
     if let Err(e) = init_logging(log_dir) {
         eprintln!("Warning: could not initialise file logging ({e}); falling back to stderr only");
-        // Ensure we at least get output on stderr
         env_logger_fallback();
     }
 
-    info!("nakotp starting (config: {})", config_path.display());
+    info!(
+        "nakotp starting — {} account(s) (config: {})",
+        config.accounts.len(),
+        config_path.display()
+    );
 
-    let hmac_key = parse_hex_key(&config.hmac_key_hex)?;
+    let accounts: Vec<Account> = config
+        .accounts
+        .iter()
+        .map(|ac| {
+            let hmac_key = parse_hex_key(&ac.hmac_key_hex)?;
+            Ok(Account {
+                hmac_key,
+                otp_header: ac.otp_header.clone(),
+                otp_digits: ac.otp_digits,
+            })
+        })
+        .collect::<anyhow::Result<_>>()?;
 
-    let state = Arc::new(AppState {
-        hmac_key,
-        otp_digits: config.otp_digits,
-        otp_header: config.otp_header.clone(),
-    });
+    let state = Arc::new(AppState { accounts });
 
     let bind_addr = config.bind_address.as_deref().unwrap_or("0.0.0.0");
     let https_port = config.port.unwrap_or(443);
@@ -380,10 +518,9 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/", get(handle_index))
-        .route("/api/code", get(handle_api_code))
+        .route("/bare", get(handle_bare))
         .with_state(state);
 
-    // Optional HTTP → HTTPS redirect server
     if http_port > 0 {
         let http_addr: SocketAddr = format!("{bind_addr}:{http_port}").parse()?;
         tokio::spawn(async move {
@@ -425,27 +562,4 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     Ok(())
-}
-
-/// Minimal stderr-only logger used when log4rs fails to initialise (e.g. log
-/// directory doesn't exist yet on a dev machine).
-fn env_logger_fallback() {
-    use log::LevelFilter;
-    use log4rs::{
-        append::console::ConsoleAppender,
-        config::{Appender, Config, Root},
-        encode::pattern::PatternEncoder,
-    };
-    let console = ConsoleAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(
-            "{d(%H:%M:%S)} [{l:<5}] {m}{n}",
-        )))
-        .build();
-    if let Ok(config) = Config::builder()
-        .appender(Appender::builder().build("console", Box::new(console)))
-        .build(Root::builder().appender("console").build(LevelFilter::Info))
-    {
-        let _ = log4rs::init_config(config);
-    }
-    let _ = tracing_log::LogTracer::init();
 }

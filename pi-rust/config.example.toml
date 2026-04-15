@@ -1,16 +1,18 @@
 # NakOTP configuration
 # Copy to /etc/nakotp/config.toml and fill in real values.
 
-# TOTP HMAC key as hex-encoded bytes.
-# Decode the otpauth-migration:// URI from your authenticator app export
-# to extract the raw secret bytes, then hex-encode them here.
+# One [[account]] section per TOTP account.
+# otp_digits defaults to 6 if omitted.
+
+[[account]]
 hmac_key_hex = "000102030405060708090a0b0c0d0e0f10111213"
+otp_header   = "Google"
+otp_digits   = 6
 
-# Number of digits in the generated OTP (typically 6 or 8)
-otp_digits = 6
-
-# Label shown in the web UI header
-otp_header = "issuer.example.com"
+[[account]]
+hmac_key_hex = "1a2b3c4d5e6f000102030405060708090a0b0c0d"
+otp_header   = "GitHub"
+otp_digits   = 6
 
 # Paths to the wildcard TLS certificate issued by the nasbox certbot setup.
 # See ~/repos/nakomis/nasbox/certificates/docs/setup.md for how these are obtained.
