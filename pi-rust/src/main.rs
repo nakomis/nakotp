@@ -5,6 +5,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use log::{error, info};
+
 use axum::{
     extract::State,
     http::Uri,
@@ -38,6 +40,8 @@ struct Config {
     port: Option<u16>,
     /// HTTP port for redirect to HTTPS (default: 80; set to 0 to disable)
     http_port: Option<u16>,
+    /// Directory for log files (default: /var/log/nakotp)
+    log_dir: Option<String>,
 }
 
 struct AppState {
@@ -81,6 +85,7 @@ fn compute_totp(key: &[u8], digits: u32) -> (String, u64) {
 
 async fn handle_api_code(State(state): State<Arc<AppState>>) -> Json<OtpResponse> {
     let (code, expires_at) = compute_totp(&state.hmac_key, state.otp_digits);
+    info!("GET /api/code → {}", code);
     Json(OtpResponse {
         code,
         expires_at,
@@ -91,6 +96,7 @@ async fn handle_api_code(State(state): State<Arc<AppState>>) -> Json<OtpResponse
 
 async fn handle_index(State(state): State<Arc<AppState>>) -> Html<String> {
     let (code, expires_at) = compute_totp(&state.hmac_key, state.otp_digits);
+    info!("GET / → {}", code);
     Html(render_html(&state.otp_header, &code, expires_at))
 }
 
@@ -214,6 +220,57 @@ fn render_html(header: &str, code: &str, expires_at: u64) -> String {
     )
 }
 
+fn init_logging(log_dir: &str) -> anyhow::Result<()> {
+    use log::LevelFilter;
+    use log4rs::{
+        append::{
+            console::ConsoleAppender,
+            rolling_file::{
+                policy::compound::{
+                    roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger,
+                    CompoundPolicy,
+                },
+                RollingFileAppender,
+            },
+        },
+        config::{Appender, Config, Root},
+        encode::pattern::PatternEncoder,
+    };
+
+    let pattern = "{d(%Y-%m-%d %H:%M:%S %Z)} [{l:<5}] {t} — {m}{n}";
+
+    let console = ConsoleAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(pattern)))
+        .build();
+
+    let log_file = format!("{log_dir}/nakotp.log");
+    let archive_pattern = format!("{log_dir}/nakotp.log.{{}}.gz");
+
+    let roller = FixedWindowRoller::builder().build(&archive_pattern, 5)?;
+    let trigger = SizeTrigger::new(10 * 1024 * 1024); // 10 MB
+    let policy = CompoundPolicy::new(Box::new(trigger), Box::new(roller));
+    let file = RollingFileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(pattern)))
+        .build(&log_file, Box::new(policy))?;
+
+    let config = Config::builder()
+        .appender(Appender::builder().build("console", Box::new(console)))
+        .appender(Appender::builder().build("file", Box::new(file)))
+        .build(
+            Root::builder()
+                .appender("console")
+                .appender("file")
+                .build(LevelFilter::Info),
+        )?;
+
+    log4rs::init_config(config)?;
+
+    // Route axum's tracing events into the log crate so they appear in log4rs
+    tracing_log::LogTracer::init()?;
+
+    Ok(())
+}
+
 async fn handle_http_redirect(uri: Uri) -> impl IntoResponse {
     let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
     Redirect::permanent(&format!("https://nakotp.nasbox.nakomis.com{path}"))
@@ -248,12 +305,21 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("could not read config {:?}: {e}", config_path))?;
     let config: Config = toml::from_str(&config_str)?;
 
+    let log_dir = config.log_dir.as_deref().unwrap_or("/var/log/nakotp");
+    if let Err(e) = init_logging(log_dir) {
+        eprintln!("Warning: could not initialise file logging ({e}); falling back to stderr only");
+        // Ensure we at least get output on stderr
+        env_logger_fallback();
+    }
+
+    info!("nakotp starting (config: {})", config_path.display());
+
     let hmac_key = parse_hex_key(&config.hmac_key_hex)?;
 
     let state = Arc::new(AppState {
         hmac_key,
         otp_digits: config.otp_digits,
-        otp_header: config.otp_header,
+        otp_header: config.otp_header.clone(),
     });
 
     let bind_addr = config.bind_address.as_deref().unwrap_or("0.0.0.0");
@@ -271,19 +337,47 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             let redirect_app = Router::new().fallback(handle_http_redirect);
             let listener = TcpListener::bind(http_addr).await.unwrap();
-            eprintln!("HTTP redirect listening on http://{http_addr}");
+            info!("HTTP redirect listening on http://{http_addr}");
             axum::serve(listener, redirect_app).await.unwrap();
         });
     }
 
-    let tls_config = RustlsConfig::from_pem_file(&config.cert_path, &config.key_path).await?;
+    let tls_config = RustlsConfig::from_pem_file(&config.cert_path, &config.key_path)
+        .await
+        .map_err(|e| {
+            error!("Failed to load TLS certificates: {e}");
+            e
+        })?;
 
     let https_addr: SocketAddr = format!("{bind_addr}:{https_port}").parse()?;
-    eprintln!("HTTPS server listening on https://{https_addr}");
+    info!("HTTPS server listening on https://{https_addr}");
 
     axum_server::bind_rustls(https_addr, tls_config)
         .serve(app.into_make_service())
         .await?;
 
     Ok(())
+}
+
+/// Minimal stderr-only logger used when log4rs fails to initialise (e.g. log
+/// directory doesn't exist yet on a dev machine).
+fn env_logger_fallback() {
+    use log::LevelFilter;
+    use log4rs::{
+        append::console::ConsoleAppender,
+        config::{Appender, Config, Root},
+        encode::pattern::PatternEncoder,
+    };
+    let console = ConsoleAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%H:%M:%S)} [{l:<5}] {m}{n}",
+        )))
+        .build();
+    if let Ok(config) = Config::builder()
+        .appender(Appender::builder().build("console", Box::new(console)))
+        .build(Root::builder().appender("console").build(LevelFilter::Info))
+    {
+        let _ = log4rs::init_config(config);
+    }
+    let _ = tracing_log::LogTracer::init();
 }

@@ -29,6 +29,11 @@ if ! id nakotp &>/dev/null; then
     sudo useradd -r -s /sbin/nologin nakotp
 fi
 
+# Create log directory
+sudo mkdir -p /var/log/nakotp
+sudo chown nakotp:nakotp /var/log/nakotp
+sudo chmod 750 /var/log/nakotp
+
 # Install example config if no real config exists yet
 sudo mkdir -p /etc/nakotp
 if [ ! -f /etc/nakotp/config.toml ]; then

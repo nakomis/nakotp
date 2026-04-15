@@ -19,5 +19,6 @@ key_path  = "/etc/letsencrypt/live/nasbox.nakomis.com/privkey.pem"
 
 # Optional overrides (defaults shown)
 # bind_address = "0.0.0.0"
-# port      = 443   # HTTPS
-# http_port = 80    # HTTP → HTTPS redirect; set to 0 to disable
+# port      = 443              # HTTPS
+# http_port = 80               # HTTP → HTTPS redirect; set to 0 to disable
+# log_dir   = "/var/log/nakotp"
