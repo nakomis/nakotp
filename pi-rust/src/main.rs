@@ -10,7 +10,8 @@ use log::{error, info};
 
 use axum::{
     extract::{Query, State},
-    response::Html,
+    http::header,
+    response::{Html, Response},
     routing::get,
     Json, Router,
 };
@@ -142,6 +143,15 @@ async fn handle_bare(
     Json(codes)
 }
 
+async fn handle_favicon() -> Response<axum::body::Body> {
+    static FAVICON: &[u8] = include_bytes!("favicon.png");
+    Response::builder()
+        .header(header::CONTENT_TYPE, "image/png")
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .body(axum::body::Body::from(FAVICON))
+        .unwrap()
+}
+
 async fn handle_index(State(state): State<Arc<AppState>>) -> Html<String> {
     let codes = all_codes(&state);
     info!("GET / → {} account(s)", codes.len());
@@ -185,6 +195,7 @@ fn render_html(accounts: &[OtpResponse]) -> String {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NakOTP</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
@@ -445,6 +456,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(handle_index))
         .route("/bare", get(handle_bare))
+        .route("/favicon.png", get(handle_favicon))
         .with_state(state);
 
     // Bind to localhost by default — nginx is the public-facing TLS endpoint
