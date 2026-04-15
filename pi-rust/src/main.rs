@@ -42,6 +42,9 @@ struct Config {
     http_port: Option<u16>,
     /// Directory for log files (default: /var/log/nakotp)
     log_dir: Option<String>,
+    /// Path to the CA certificate used to verify client certificates.
+    /// When set, mTLS is required on all HTTPS connections.
+    client_ca_cert: Option<String>,
 }
 
 struct AppState {
@@ -220,6 +223,55 @@ fn render_html(header: &str, code: &str, expires_at: u64) -> String {
     )
 }
 
+/// Build a rustls ServerConfig that requires a client certificate signed by the
+/// given CA, using the Let's Encrypt cert/key for the server identity.
+async fn build_mtls_server_config(
+    ca_cert_path: &str,
+    server_cert_path: &str,
+    server_key_path: &str,
+) -> anyhow::Result<rustls::ServerConfig> {
+    use rustls::{
+        pki_types::{CertificateDer, PrivateKeyDer},
+        server::WebPkiClientVerifier,
+        RootCertStore, ServerConfig,
+    };
+
+    // Load CA cert — used to verify client certificates
+    let ca_pem = tokio::fs::read(ca_cert_path).await.map_err(|e| {
+        anyhow::anyhow!("could not read client CA cert {ca_cert_path}: {e}")
+    })?;
+    let ca_certs: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut ca_pem.as_slice()).collect::<Result<_, _>>()?;
+
+    let mut root_store = RootCertStore::empty();
+    for cert in ca_certs {
+        root_store.add(cert)?;
+    }
+
+    let client_verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
+
+    // Load server cert chain (Let's Encrypt fullchain.pem)
+    let cert_pem = tokio::fs::read(server_cert_path).await.map_err(|e| {
+        anyhow::anyhow!("could not read server cert {server_cert_path}: {e}")
+    })?;
+    let certs: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut cert_pem.as_slice()).collect::<Result<_, _>>()?;
+
+    // Load server private key
+    let key_pem = tokio::fs::read(server_key_path).await.map_err(|e| {
+        anyhow::anyhow!("could not read server key {server_key_path}: {e}")
+    })?;
+    let key: PrivateKeyDer<'static> =
+        rustls_pemfile::private_key(&mut key_pem.as_slice())?
+            .ok_or_else(|| anyhow::anyhow!("no private key found in {server_key_path}"))?;
+
+    let config = ServerConfig::builder()
+        .with_client_cert_verifier(client_verifier)
+        .with_single_cert(certs, key)?;
+
+    Ok(config)
+}
+
 fn init_logging(log_dir: &str) -> anyhow::Result<()> {
     use log::LevelFilter;
     use log4rs::{
@@ -342,12 +394,28 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let tls_config = RustlsConfig::from_pem_file(&config.cert_path, &config.key_path)
-        .await
-        .map_err(|e| {
-            error!("Failed to load TLS certificates: {e}");
-            e
-        })?;
+    let tls_config = match &config.client_ca_cert {
+        Some(ca_path) => {
+            info!("mTLS enabled — client certificates required (CA: {ca_path})");
+            let server_config =
+                build_mtls_server_config(ca_path, &config.cert_path, &config.key_path)
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to build mTLS config: {e}");
+                        e
+                    })?;
+            RustlsConfig::from_config(Arc::new(server_config))
+        }
+        None => {
+            info!("mTLS disabled — no client_ca_cert configured");
+            RustlsConfig::from_pem_file(&config.cert_path, &config.key_path)
+                .await
+                .map_err(|e| {
+                    error!("Failed to load TLS certificates: {e}");
+                    e
+                })?
+        }
+    };
 
     let https_addr: SocketAddr = format!("{bind_addr}:{https_port}").parse()?;
     info!("HTTPS server listening on https://{https_addr}");

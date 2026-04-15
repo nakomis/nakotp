@@ -18,6 +18,13 @@ scp "${BINARY}" "${PI_HOST}:/tmp/nakotp"
 scp "${SERVICE_FILE}" "${PI_HOST}:/tmp/nakotp.service"
 scp "${EXAMPLE_CONFIG}" "${PI_HOST}:/tmp/nakotp.config.example.toml"
 
+# Copy the mTLS CA cert to the Pi if it has been generated locally
+CA_CERT="${SCRIPT_DIR}/certs/ca.crt"
+if [ -f "${CA_CERT}" ]; then
+    echo "==> Copying mTLS CA certificate..."
+    scp "${CA_CERT}" "${PI_HOST}:/tmp/nakotp-ca.crt"
+fi
+
 echo "==> Installing binary, service, and restarting..."
 ssh "${PI_HOST}" bash << 'REMOTE'
 set -e
@@ -39,8 +46,16 @@ sudo chmod 750 /var/log/nakotp
 sudo apt-get install -y acl >/dev/null 2>&1 || true
 sudo setfacl -R -m u:nakotp:rX /etc/letsencrypt/live /etc/letsencrypt/archive
 
-# Install example config if no real config exists yet
+# Install mTLS CA cert if it was uploaded
 sudo mkdir -p /etc/nakotp
+if [ -f /tmp/nakotp-ca.crt ]; then
+    sudo mv /tmp/nakotp-ca.crt /etc/nakotp/ca.crt
+    sudo chown root:nakotp /etc/nakotp/ca.crt
+    sudo chmod 640 /etc/nakotp/ca.crt
+    echo "Installed CA cert at /etc/nakotp/ca.crt"
+fi
+
+# Install example config if no real config exists yet
 if [ ! -f /etc/nakotp/config.toml ]; then
     sudo mv /tmp/nakotp.config.example.toml /etc/nakotp/config.toml
     echo ""

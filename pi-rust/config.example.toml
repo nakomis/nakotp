@@ -17,6 +17,11 @@ otp_header = "issuer.example.com"
 cert_path = "/etc/letsencrypt/live/nasbox.nakomis.com/fullchain.pem"
 key_path  = "/etc/letsencrypt/live/nasbox.nakomis.com/privkey.pem"
 
+# Mutual TLS — require a client certificate signed by this CA.
+# Generate the CA and client certs with: bash pi-rust/certs/generate_ca.sh
+# The CA cert is copied to the Pi automatically by deploy.sh when present.
+# client_ca_cert = "/etc/nakotp/ca.crt"
+
 # Optional overrides (defaults shown)
 # bind_address = "0.0.0.0"
 # port      = 443              # HTTPS
