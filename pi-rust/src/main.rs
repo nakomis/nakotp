@@ -10,12 +10,10 @@ use log::{error, info};
 
 use axum::{
     extract::{Query, State},
-    http::Uri,
-    response::{Html, IntoResponse, Redirect},
+    response::Html,
     routing::get,
     Json, Router,
 };
-use axum_server::tls_rustls::RustlsConfig;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -31,7 +29,7 @@ type HmacSha1 = Hmac<Sha1>;
 struct AccountConfig {
     hmac_key_hex: String,
     otp_header: String,
-    /// Number of OTP digits (typically 6 or 8)
+    /// Number of OTP digits (typically 6 or 8; defaults to 6)
     #[serde(default = "default_digits")]
     otp_digits: u32,
 }
@@ -44,21 +42,12 @@ fn default_digits() -> u32 {
 struct Config {
     #[serde(rename = "account")]
     accounts: Vec<AccountConfig>,
-    /// Path to the TLS certificate chain PEM file
-    cert_path: String,
-    /// Path to the TLS private key PEM file
-    key_path: String,
-    /// IP address to bind to (default: 0.0.0.0)
+    /// IP address to bind to (default: 127.0.0.1 — nginx proxies to us)
     bind_address: Option<String>,
-    /// HTTPS port (default: 443)
+    /// Port to listen on (default: 8766)
     port: Option<u16>,
-    /// HTTP port for redirect to HTTPS (default: 80; set to 0 to disable)
-    http_port: Option<u16>,
     /// Directory for log files (default: /var/log/nakotp)
     log_dir: Option<String>,
-    /// Path to the CA certificate used to verify client certificates.
-    /// When set, mTLS is required on all HTTPS connections.
-    client_ca_cert: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +149,6 @@ async fn handle_index(State(state): State<Arc<AppState>>) -> Html<String> {
 }
 
 fn render_html(accounts: &[OtpResponse]) -> String {
-    // Build the initial cards HTML
     let cards: String = accounts
         .iter()
         .map(|acc| {
@@ -188,7 +176,6 @@ fn render_html(accounts: &[OtpResponse]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Serialise initial data for the JS bootstrap
     let init_data = serde_json::to_string(accounts).unwrap_or_else(|_| "[]".into());
 
     format!(
@@ -268,7 +255,6 @@ fn render_html(accounts: &[OtpResponse]) -> String {
     {cards}
   </div>
   <script>
-    // Bootstrap from server-rendered data so there's no flash on load
     let accounts = {init_data};
 
     function cardEl(header) {{
@@ -323,59 +309,6 @@ fn render_html(accounts: &[OtpResponse]) -> String {
     )
 }
 
-async fn handle_http_redirect(uri: Uri) -> impl IntoResponse {
-    let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
-    Redirect::permanent(&format!("https://nakotp.nasbox.nakomis.com{path}"))
-}
-
-// ---------------------------------------------------------------------------
-// mTLS
-// ---------------------------------------------------------------------------
-
-async fn build_mtls_server_config(
-    ca_cert_path: &str,
-    server_cert_path: &str,
-    server_key_path: &str,
-) -> anyhow::Result<rustls::ServerConfig> {
-    use rustls::{
-        pki_types::{CertificateDer, PrivateKeyDer},
-        server::WebPkiClientVerifier,
-        RootCertStore, ServerConfig,
-    };
-
-    let ca_pem = tokio::fs::read(ca_cert_path).await.map_err(|e| {
-        anyhow::anyhow!("could not read client CA cert {ca_cert_path}: {e}")
-    })?;
-    let ca_certs: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut ca_pem.as_slice()).collect::<Result<_, _>>()?;
-
-    let mut root_store = RootCertStore::empty();
-    for cert in ca_certs {
-        root_store.add(cert)?;
-    }
-
-    let client_verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
-
-    let cert_pem = tokio::fs::read(server_cert_path).await.map_err(|e| {
-        anyhow::anyhow!("could not read server cert {server_cert_path}: {e}")
-    })?;
-    let certs: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut cert_pem.as_slice()).collect::<Result<_, _>>()?;
-
-    let key_pem = tokio::fs::read(server_key_path).await.map_err(|e| {
-        anyhow::anyhow!("could not read server key {server_key_path}: {e}")
-    })?;
-    let key: PrivateKeyDer<'static> =
-        rustls_pemfile::private_key(&mut key_pem.as_slice())?
-            .ok_or_else(|| anyhow::anyhow!("no private key found in {server_key_path}"))?;
-
-    let config = ServerConfig::builder()
-        .with_client_cert_verifier(client_verifier)
-        .with_single_cert(certs, key)?;
-
-    Ok(config)
-}
-
 // ---------------------------------------------------------------------------
 // Logging
 // ---------------------------------------------------------------------------
@@ -398,16 +331,14 @@ fn init_logging(log_dir: &str) -> anyhow::Result<()> {
     };
 
     let pattern = "{d(%Y-%m-%d %H:%M:%S %Z)} [{l:<5}] {t} — {m}{n}";
-
     let console = ConsoleAppender::builder()
         .encoder(Box::new(PatternEncoder::new(pattern)))
         .build();
 
     let log_file = format!("{log_dir}/nakotp.log");
     let archive_pattern = format!("{log_dir}/nakotp.log.{{}}.gz");
-
     let roller = FixedWindowRoller::builder().build(&archive_pattern, 4)?;
-    let trigger = SizeTrigger::new(10 * 1024 * 1024); // 10 MB per file, 4 archives kept
+    let trigger = SizeTrigger::new(10 * 1024 * 1024);
     let policy = CompoundPolicy::new(Box::new(trigger), Box::new(roller));
     let file = RollingFileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(pattern)))
@@ -425,7 +356,6 @@ fn init_logging(log_dir: &str) -> anyhow::Result<()> {
 
     log4rs::init_config(config)?;
     tracing_log::LogTracer::init()?;
-
     Ok(())
 }
 
@@ -512,54 +442,24 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState { accounts });
 
-    let bind_addr = config.bind_address.as_deref().unwrap_or("0.0.0.0");
-    let https_port = config.port.unwrap_or(443);
-    let http_port = config.http_port.unwrap_or(80);
-
     let app = Router::new()
         .route("/", get(handle_index))
         .route("/bare", get(handle_bare))
         .with_state(state);
 
-    if http_port > 0 {
-        let http_addr: SocketAddr = format!("{bind_addr}:{http_port}").parse()?;
-        tokio::spawn(async move {
-            let redirect_app = Router::new().fallback(handle_http_redirect);
-            let listener = TcpListener::bind(http_addr).await.unwrap();
-            info!("HTTP redirect listening on http://{http_addr}");
-            axum::serve(listener, redirect_app).await.unwrap();
-        });
-    }
+    // Bind to localhost by default — nginx is the public-facing TLS endpoint
+    let bind_addr = config.bind_address.as_deref().unwrap_or("127.0.0.1");
+    let port = config.port.unwrap_or(8766);
+    let addr: SocketAddr = format!("{bind_addr}:{port}").parse()?;
 
-    let tls_config = match &config.client_ca_cert {
-        Some(ca_path) => {
-            info!("mTLS enabled — client certificates required (CA: {ca_path})");
-            let server_config =
-                build_mtls_server_config(ca_path, &config.cert_path, &config.key_path)
-                    .await
-                    .map_err(|e| {
-                        error!("Failed to build mTLS config: {e}");
-                        e
-                    })?;
-            RustlsConfig::from_config(Arc::new(server_config))
-        }
-        None => {
-            info!("mTLS disabled — no client_ca_cert configured");
-            RustlsConfig::from_pem_file(&config.cert_path, &config.key_path)
-                .await
-                .map_err(|e| {
-                    error!("Failed to load TLS certificates: {e}");
-                    e
-                })?
-        }
-    };
+    info!("Listening on http://{addr} (nginx proxies https://nakotp.nasbox.nakomis.com → here)");
 
-    let https_addr: SocketAddr = format!("{bind_addr}:{https_port}").parse()?;
-    info!("HTTPS server listening on https://{https_addr}");
+    let listener = TcpListener::bind(addr).await.map_err(|e| {
+        error!("Failed to bind to {addr}: {e}");
+        e
+    })?;
 
-    axum_server::bind_rustls(https_addr, tls_config)
-        .serve(app.into_make_service())
-        .await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

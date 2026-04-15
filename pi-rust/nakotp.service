@@ -9,17 +9,12 @@ ExecStart=/usr/local/bin/nakotp --config /etc/nakotp/config.toml
 Restart=on-failure
 RestartSec=5
 
-# Run as a dedicated user (create with: sudo useradd -r -s /sbin/nologin nakotp)
+# Run as a dedicated user (created by deploy.sh)
 User=nakotp
 Group=nakotp
 
-# Allow binding to privileged ports (80, 443) without running as root
-AmbientCapabilities=CAP_NET_BIND_SERVICE
+# Binds to localhost:8766 only — no privileged ports, no special capabilities needed
 NoNewPrivileges=true
-
-# Let certbot's post-renewal hook restart this service
-# Add to /etc/letsencrypt/renewal-hooks/post/reload-nakotp.sh:
-#   systemctl restart nakotp
 
 [Install]
 WantedBy=multi-user.target

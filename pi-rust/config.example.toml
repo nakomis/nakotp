@@ -1,25 +1,17 @@
 # NakOTP configuration
 # Copy to /etc/nakotp/config.toml and fill in real values.
 #
+# TLS and mTLS are handled by nginx (see nasbox/nginx/nasbox.nakomis.com.conf).
+# nakotp itself listens on plain HTTP at 127.0.0.1:8766.
+#
 # IMPORTANT: [[account]] sections must come LAST in this file.
 # In TOML, once an [[array-of-tables]] header appears, all subsequent
 # key = value pairs belong to that table until the next header.
 
-# Paths to the wildcard TLS certificate issued by the nasbox certbot setup.
-# See ~/repos/nakomis/nasbox/certificates/docs/setup.md for how these are obtained.
-cert_path = "/etc/letsencrypt/live/nasbox.nakomis.com/fullchain.pem"
-key_path  = "/etc/letsencrypt/live/nasbox.nakomis.com/privkey.pem"
-
-# Mutual TLS — require a client certificate signed by this CA.
-# Generate the CA and client certs with: bash pi-rust/certs/generate_ca.sh
-# The CA cert is copied to the Pi automatically by deploy.sh when present.
-# client_ca_cert = "/etc/nakotp/ca.crt"
-
 # Optional overrides (defaults shown)
-# bind_address = "0.0.0.0"
-# port      = 443              # HTTPS
-# http_port = 80               # HTTP → HTTPS redirect; set to 0 to disable
-# log_dir   = "/var/log/nakotp"
+# bind_address = "127.0.0.1"
+# port         = 8766
+# log_dir      = "/var/log/nakotp"
 
 # ---------------------------------------------------------------------------
 # Accounts — one [[account]] block per TOTP account. Must be at the end.
