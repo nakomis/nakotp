@@ -27,10 +27,11 @@ echo "=== Generating client certificate for '$CLIENT_NAME' ==="
 openssl ecparam -name $EC_CURVE -genkey -noout -out "$CERTS_DIR/$CLIENT_NAME.key"
 openssl req -new -key "$CERTS_DIR/$CLIENT_NAME.key" -out "$CERTS_DIR/$CLIENT_NAME.csr" \
     -subj "/O=$ORG/CN=$CLIENT_NAME"
-openssl x509 -req -days $DAYS_VALID \
+openssl x509 -req -days $DAYS_VALID -sha256 \
     -in "$CERTS_DIR/$CLIENT_NAME.csr" \
     -CA "$CERTS_DIR/ca.crt" -CAkey "$CERTS_DIR/ca.key" \
-    -CAcreateserial -out "$CERTS_DIR/$CLIENT_NAME.crt"
+    -CAcreateserial -out "$CERTS_DIR/$CLIENT_NAME.crt" \
+    -extfile <(echo "extendedKeyUsage=clientAuth")
 
 # Combined PEM (cert + key) for curl / Python clients
 cat "$CERTS_DIR/$CLIENT_NAME.crt" "$CERTS_DIR/$CLIENT_NAME.key" > "$CERTS_DIR/$CLIENT_NAME.pem"
