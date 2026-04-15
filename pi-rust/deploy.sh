@@ -34,6 +34,11 @@ sudo mkdir -p /var/log/nakotp
 sudo chown nakotp:nakotp /var/log/nakotp
 sudo chmod 750 /var/log/nakotp
 
+# Grant the nakotp user read access to the Let's Encrypt certificates.
+# The live/ directory contains symlinks into archive/, so both need ACL entries.
+sudo apt-get install -y acl >/dev/null 2>&1 || true
+sudo setfacl -R -m u:nakotp:rX /etc/letsencrypt/live /etc/letsencrypt/archive
+
 # Install example config if no real config exists yet
 sudo mkdir -p /etc/nakotp
 if [ ! -f /etc/nakotp/config.toml ]; then
