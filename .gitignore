@@ -2,10 +2,22 @@
 **/*.bkp
 .python-version
 .vscode
+
+# ESP32 / PlatformIO
 .pio
 **/secrets.h
 **/server_certs.h
-certs/*.key
-certs/*.crt
-certs/*.pem
-certs/*.h
+esp32/certs/*.key
+esp32/certs/*.crt
+esp32/certs/*.pem
+esp32/certs/*.h
+
+# Rust
+pi-rust/target/
+
+# Pi mTLS certificates — backed up to S3 via pi-rust/certs/s3sync.sh
+pi-rust/certs/*.key
+pi-rust/certs/*.crt
+pi-rust/certs/*.pem
+pi-rust/certs/*.p12
+pi-rust/certs/*.srl

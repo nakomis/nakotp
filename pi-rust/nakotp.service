@@ -1,0 +1,20 @@
+[Unit]
+Description=NakOTP TOTP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nakotp --config /etc/nakotp/config.toml
+Restart=on-failure
+RestartSec=5
+
+# Run as a dedicated user (created by deploy.sh)
+User=nakotp
+Group=nakotp
+
+# Binds to localhost:8766 only — no privileged ports, no special capabilities needed
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+# NakOTP configuration
+# Copy to /etc/nakotp/config.toml and fill in real values.
+#
+# TLS and mTLS are handled by nginx (see nasbox/nginx/nasbox.nakomis.com.conf).
+# nakotp itself listens on plain HTTP at 127.0.0.1:8766.
+#
+# IMPORTANT: [[account]] sections must come LAST in this file.
+# In TOML, once an [[array-of-tables]] header appears, all subsequent
+# key = value pairs belong to that table until the next header.
+
+# Optional overrides (defaults shown)
+# bind_address = "127.0.0.1"
+# port         = 8766
+# log_dir      = "/var/log/nakotp"
+
+# ---------------------------------------------------------------------------
+# Accounts — one [[account]] block per TOTP account. Must be at the end.
+# otp_digits defaults to 6 if omitted.
+# ---------------------------------------------------------------------------
+
+[[account]]
+hmac_key_hex = "000102030405060708090a0b0c0d0e0f10111213"
+otp_header   = "Google"
+otp_digits   = 6
+
+[[account]]
+hmac_key_hex = "1a2b3c4d5e6f000102030405060708090a0b0c0d"
+otp_header   = "GitHub"
+otp_digits   = 6
