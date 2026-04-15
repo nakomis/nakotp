@@ -246,8 +246,8 @@ fn init_logging(log_dir: &str) -> anyhow::Result<()> {
     let log_file = format!("{log_dir}/nakotp.log");
     let archive_pattern = format!("{log_dir}/nakotp.log.{{}}.gz");
 
-    let roller = FixedWindowRoller::builder().build(&archive_pattern, 5)?;
-    let trigger = SizeTrigger::new(10 * 1024 * 1024); // 10 MB
+    let roller = FixedWindowRoller::builder().build(&archive_pattern, 4)?;
+    let trigger = SizeTrigger::new(10 * 1024 * 1024); // 10 MB per file, 4 archives kept
     let policy = CompoundPolicy::new(Box::new(trigger), Box::new(roller));
     let file = RollingFileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(pattern)))
