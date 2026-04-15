@@ -1,0 +1,23 @@
+# NakOTP configuration
+# Copy to /etc/nakotp/config.toml and fill in real values.
+
+# TOTP HMAC key as hex-encoded bytes.
+# Decode the otpauth-migration:// URI from your authenticator app export
+# to extract the raw secret bytes, then hex-encode them here.
+hmac_key_hex = "000102030405060708090a0b0c0d0e0f10111213"
+
+# Number of digits in the generated OTP (typically 6 or 8)
+otp_digits = 6
+
+# Label shown in the web UI header
+otp_header = "issuer.example.com"
+
+# Paths to the wildcard TLS certificate issued by the nasbox certbot setup.
+# See ~/repos/nakomis/nasbox/certificates/docs/setup.md for how these are obtained.
+cert_path = "/etc/letsencrypt/live/nasbox.nakomis.com/fullchain.pem"
+key_path  = "/etc/letsencrypt/live/nasbox.nakomis.com/privkey.pem"
+
+# Optional overrides (defaults shown)
+# bind_address = "0.0.0.0"
+# port      = 443   # HTTPS
+# http_port = 80    # HTTP → HTTPS redirect; set to 0 to disable

@@ -1,0 +1,19 @@
+[package]
+name = "nakotp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "nakotp"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tokio = { version = "1", features = ["full"] }
+hmac = "0.12"
+sha1 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
