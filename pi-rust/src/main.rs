@@ -225,6 +225,13 @@ fn render_html(accounts: &[OtpResponse]) -> String {
       flex: 1 1 260px;
       max-width: 340px;
     }}
+    .card {{
+      cursor: pointer;
+    }}
+    .card.copied {{
+      border-color: #238636;
+      transition: border-color 0.1s;
+    }}
     .acct-header {{
       font-size: 0.8rem;
       color: #8b949e;
@@ -309,6 +316,16 @@ fn render_html(accounts: &[OtpResponse]) -> String {
         console.error('Failed to fetch codes:', e);
       }}
     }}
+
+    document.getElementById('accounts').addEventListener('click', e => {{
+      const card = e.target.closest('.card');
+      if (!card) return;
+      const code = card.querySelector('.code').textContent.trim();
+      navigator.clipboard.writeText(code).then(() => {{
+        card.classList.add('copied');
+        setTimeout(() => card.classList.remove('copied'), 1000);
+      }});
+    }});
 
     updateDisplay();
     setInterval(updateDisplay, 1000);
