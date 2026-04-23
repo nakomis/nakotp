@@ -1,0 +1,12 @@
+# NakOTP config — copy to /mnt/data/nakotp/config.toml on Leia and fill in secrets.
+# bind_address must be "0.0.0.0" in Docker so the nginx container can reach nakotp.
+bind_address = "0.0.0.0"
+port         = 8766
+# log_dir = "/var/log/nakotp"   # optional — logs also go to stdout
+
+[[account]]
+hmac_key_hex = "your_hex_encoded_hmac_key_here"
+otp_header   = "Example Account"
+otp_digits   = 6
+
+# Add further [[account]] blocks for each TOTP account.
