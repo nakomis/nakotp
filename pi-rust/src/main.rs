@@ -317,14 +317,25 @@ fn render_html(accounts: &[OtpResponse]) -> String {
       }}
     }}
 
-    document.getElementById('accounts').addEventListener('click', e => {{
-      const card = e.target.closest('.card');
-      if (!card) return;
+    function copyCard(card) {{
       const code = card.querySelector('.code').textContent.trim();
       navigator.clipboard.writeText(code).then(() => {{
         card.classList.add('copied');
         setTimeout(() => card.classList.remove('copied'), 1000);
       }});
+    }}
+
+    document.getElementById('accounts').addEventListener('click', e => {{
+      const card = e.target.closest('.card');
+      if (card) copyCard(card);
+    }});
+
+    // Pressing 1-9 copies the OTP from the card at that (1-based) position.
+    document.addEventListener('keydown', e => {{
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      if (!/^[1-9]$/.test(e.key)) return;
+      const card = document.querySelectorAll('#accounts .card')[Number(e.key) - 1];
+      if (card) copyCard(card);
     }});
 
     updateDisplay();
