@@ -394,7 +394,6 @@ fn init_logging(log_dir: &str) -> anyhow::Result<()> {
         )?;
 
     log4rs::init_config(config)?;
-    tracing_log::LogTracer::init()?;
     Ok(())
 }
 
@@ -414,7 +413,6 @@ fn env_logger_fallback() {
     {
         let _ = log4rs::init_config(config);
     }
-    let _ = tracing_log::LogTracer::init();
 }
 
 // ---------------------------------------------------------------------------
@@ -492,7 +490,7 @@ async fn main() -> anyhow::Result<()> {
     let port = config.port.unwrap_or(8766);
     let addr: SocketAddr = format!("{bind_addr}:{port}").parse()?;
 
-    info!("Listening on http://{addr} (nginx proxies https://nakotp.nasbox.nakomis.com → here)");
+    info!("Listening on http://{addr} (nginx on Leia proxies https://nakotp.home.nakomis.com → here)");
 
     let listener = TcpListener::bind(addr).await.map_err(|e| {
         error!("Failed to bind to {addr}: {e}");
