@@ -33,6 +33,7 @@ docker buildx build \
   "$REPO_ROOT"
 
 echo "==> Pulling and restarting nakotp on $LEIA_HOST..."
-ssh "$LEIA_HOST" "cd $GATEWAY_DIR && docker compose pull nakotp && docker compose up -d nakotp"
+# sudo: the ECR credential helper is configured for root only (home-infra Leia playbook).
+ssh "$LEIA_HOST" "cd $GATEWAY_DIR && sudo docker compose pull nakotp && sudo docker compose up -d nakotp"
 
 echo "==> Done."
